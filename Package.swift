@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 5.9
 
 import PackageDescription
 
@@ -15,8 +15,7 @@ let package = Package(
         .executableTarget(
             name: "NarraV2",
             dependencies: [],
-            path: "Sources/NarraV2",
-            swiftSettings: [.swiftLanguageVersion(.v6)]
+            path: "Sources/NarraV2"
         ),
     ]
 )
