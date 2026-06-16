@@ -1,6 +1,6 @@
 import Foundation
 
-func runWithTimeout<T: Sendable>(
+func runWithTimeout<T>(
     timeout: Duration,
     operation: @escaping @Sendable () async throws -> T
 ) async -> T? {
@@ -30,7 +30,11 @@ func runWithTimeout<T: Sendable>(
     }
 }
 
-private enum TimeoutOutcome<T: Sendable>: Sendable {
+// `T` is allowed to be non-Sendable. The outcome enum carries the value
+// across the task-group boundary, but each instance is produced by one
+// child task and consumed exactly once by the parent via `group.next()`
+// — there is no concurrent access, so the @unchecked annotation is safe.
+private enum TimeoutOutcome<T>: @unchecked Sendable {
     case value(T)
     case fallback
 }
