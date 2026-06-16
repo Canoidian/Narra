@@ -42,6 +42,7 @@ final class LocalCorrectionFilterTests: XCTestCase {
             )
         )
         XCTAssertEqual(iMeanResult.refinedText, "book lunch for Wednesday")
+        XCTAssertEqual(iMeanResult.segments.map(\.text), ["book lunch for Wednesday"])
 
         let ratherResult = filter.apply(
             PostProcessingRequest(
@@ -51,6 +52,7 @@ final class LocalCorrectionFilterTests: XCTestCase {
             )
         )
         XCTAssertEqual(ratherResult.refinedText, "book lunch for Thursday")
+        XCTAssertEqual(ratherResult.segments.map(\.text), ["book lunch for Thursday"])
     }
 
     func testRestatementDedupesNearDuplicateContextToCleanerVersion() {
