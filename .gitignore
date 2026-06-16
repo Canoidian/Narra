@@ -12,3 +12,5 @@ worktrees/
 .env
 *.local
 .grok-api-key
+*.dmg
+HANDOFF.md
