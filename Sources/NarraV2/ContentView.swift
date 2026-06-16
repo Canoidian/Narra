@@ -40,10 +40,15 @@ struct ContentView: View {
                         .padding()
                 }
                 .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(.thinMaterial)
-                )
+                .background {
+                    if #available(macOS 26.0, *) {
+                        RoundedRectangle(cornerRadius: 16)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16))
+                    } else {
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(.thinMaterial)
+                    }
+                }
                 .padding(.horizontal)
 
                 Spacer()
@@ -105,13 +110,13 @@ struct SettingsPanel: View {
                 Text("Speech Model")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("Whisper Base")
+                Text("Whisper Tiny")
                     .font(.body)
 
                 Text("Language Model")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("MLX Swift")
+                Text("Llama 3.2 1B (local)")
                     .font(.body)
 
                 Text("Shortcut")
@@ -125,11 +130,16 @@ struct SettingsPanel: View {
         }
         .padding()
         .frame(width: 280, height: 320)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(.ultraThinMaterial)
-                .shadow(radius: 10)
-        )
+        .background {
+            if #available(macOS 26.0, *) {
+                RoundedRectangle(cornerRadius: 20)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
+            } else {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(.ultraThinMaterial)
+                    .shadow(radius: 10)
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 20)
                 .stroke(.white.opacity(0.2), lineWidth: 0.5)
