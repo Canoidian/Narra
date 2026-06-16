@@ -361,7 +361,8 @@ public struct LocalCorrectionFilter: Sendable {
 
     private static func makeSegment(from segment: TranscriptSegment?, text: String) -> TranscriptSegment {
         guard let segment else {
-            return TranscriptSegment(text: text, startTime: 0, endTime: 0)
+            let now = Date()
+            return TranscriptSegment(text: text, startTime: now, endTime: now)
         }
 
         return TranscriptSegment(

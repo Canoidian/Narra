@@ -1,95 +1,139 @@
 import Foundation
 
-public struct LocalPostProcessingPayload: Equatable, Sendable {
-    public var userPrompt: String
-    public var rawText: String
-    public var localFilteredText: String
-    public var contextText: String
-    public var confidence: Double?
-    public var segment: TranscriptSegment?
+/// Local post-processing service backed by an on-device LLM via MLX Swift.
+///
+/// Each call first runs the deterministic `LocalCorrectionFilter` to strip
+/// obvious fillers and self-corrections, then attempts MLX inference. If
+/// the model is unavailable or inference fails, the filter output is used
+/// as the result.
+public final class LocalPostProcessingService: PostProcessingService, @unchecked Sendable {
+
+    // MARK: - Configuration
+
+    public struct Configuration: Sendable {
+        public var modelManager: LocalModelManager
+        public var spec: LocalModelManager.ModelSpec
+        public var systemPrompt: String
+
+        public init(
+            modelManager: LocalModelManager = LocalModelManager(),
+            spec: LocalModelManager.ModelSpec = LocalModelManager.defaultLLM,
+            systemPrompt: String = LocalPostProcessingService.defaultSystemPrompt
+        ) {
+            self.modelManager = modelManager
+            self.spec = spec
+            self.systemPrompt = systemPrompt
+        }
+    }
+
+    public static let defaultSystemPrompt: String = """
+    You are a post-processor for a voice-to-text app running on-device.
+    Apply these rules IN ORDER:
+
+    1. Drop filler words ("um", "uh", "like", "you know").
+    2. Resolve self-corrections. When the speaker says "no, wait" /
+       "actually" / "I mean" and then restates, keep only the final
+       corrected version.
+    3. Merge restatements. Keep the more coherent version, drop the
+       weaker one.
+    4. Preserve the speaker's voice. Do not rephrase, summarize, or
+       add new information.
+    5. If the input is already clean, return it unchanged.
+
+    Output: the cleaned text only, with no preamble or quotation marks.
+    """
+
+    // MARK: - State
+
+    private let configuration: Configuration
+    private let localFilter: LocalCorrectionFilter
 
     public init(
-        userPrompt: String,
-        rawText: String,
-        localFilteredText: String,
-        contextText: String,
-        confidence: Double?,
-        segment: TranscriptSegment?
+        configuration: Configuration = Configuration(),
+        localFilter: LocalCorrectionFilter = LocalCorrectionFilter()
     ) {
-        self.userPrompt = userPrompt
-        self.rawText = rawText
-        self.localFilteredText = localFilteredText
-        self.contextText = contextText
-        self.confidence = confidence
-        self.segment = segment
-    }
-}
-
-public struct LocalPostProcessingService: PostProcessingService {
-    public typealias Refinement = @Sendable (_ payload: LocalPostProcessingPayload, _ localResult: PostProcessingResult) async throws -> String
-
-    private let filter: LocalCorrectionFilter
-    private let timeout: Duration
-    private let refinement: Refinement?
-
-    public init(
-        filter: LocalCorrectionFilter = LocalCorrectionFilter(),
-        timeout: Duration = .seconds(2),
-        refinement: Refinement? = nil
-    ) {
-        self.filter = filter
-        self.timeout = timeout
-        self.refinement = refinement
+        self.configuration = configuration
+        self.localFilter = localFilter
     }
 
-    public func process(_ request: PostProcessingRequest) async throws -> PostProcessingResult {
-        let localResult = filter.apply(request)
-        guard let refinement else {
-            return localResult
+    // MARK: - PostProcessingService
+
+    public func process(segment: TranscriptSegment) async throws -> ProcessedTranscript {
+        try await process(segments: [segment])
+    }
+
+    public func process(segments: [TranscriptSegment]) async throws -> ProcessedTranscript {
+        guard !segments.isEmpty else {
+            throw PostProcessingError.serviceError("No segments to process")
         }
 
-        let payload = Self.makePayload(request: request, localResult: localResult)
-        guard let refinedText = await runWithTimeout(timeout: timeout, operation: { try await refinement(payload, localResult) }) else {
-            return localResult
+        let filtered = applyLocalFilter(to: segments)
+        let start = segments.map(\.startTime).min() ?? Date()
+        let end = segments.map(\.endTime).max() ?? Date()
+        let avgConfidence = segments.map(\.confidence).reduce(0, +) / Double(segments.count)
+
+        if let mlxText = try? await runMLX(on: filtered) {
+            return ProcessedTranscript(
+                text: mlxText,
+                startTime: start,
+                endTime: end,
+                sourceSegmentIDs: segments.map(\.id),
+                confidence: avgConfidence
+            )
         }
 
-        return Self.replacingResult(localResult, with: refinedText, request: request)
-    }
-
-    private static func makePayload(request: PostProcessingRequest, localResult: PostProcessingResult) -> LocalPostProcessingPayload {
-        LocalPostProcessingPayload(
-            userPrompt: localResult.refinedText,
-            rawText: request.rawText,
-            localFilteredText: localResult.refinedText,
-            contextText: request.context.map(\.text).joined(separator: " "),
-            confidence: request.segment?.confidence,
-            segment: request.segment
+        let text = filtered.map(\.text).joined(separator: " ")
+        return ProcessedTranscript(
+            text: text,
+            startTime: start,
+            endTime: end,
+            sourceSegmentIDs: segments.map(\.id),
+            confidence: avgConfidence
         )
     }
 
-    private static func replacingResult(
-        _ localResult: PostProcessingResult,
-        with refinedText: String,
-        request: PostProcessingRequest
-    ) -> PostProcessingResult {
-        var segments = localResult.segments
+    // MARK: - Local pre-pass
 
-        if let lastIndex = segments.indices.last {
-            var lastSegment = segments[lastIndex]
-            lastSegment.text = refinedText
-            segments[lastIndex] = lastSegment
-        } else if let segment = request.segment {
-            segments = [
-                TranscriptSegment(
-                    id: segment.id,
-                    text: refinedText,
-                    startTime: segment.startTime,
-                    endTime: segment.endTime,
-                    confidence: segment.confidence
-                )
-            ]
+    private func applyLocalFilter(to segments: [TranscriptSegment]) -> [TranscriptSegment] {
+        segments.map { segment in
+            let request = PostProcessingRequest(rawText: segment.text, segment: segment)
+            let result = localFilter.apply(request)
+            return TranscriptSegment(
+                id: segment.id,
+                text: result.refinedText,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                confidence: segment.confidence
+            )
         }
+    }
 
-        return PostProcessingResult(refinedText: refinedText, segments: segments)
+    // MARK: - MLX inference
+
+    private func runMLX(on segments: [TranscriptSegment]) async throws -> String {
+        let modelURL = try await ensureModel()
+
+        // TODO(integration): replace with MLX Swift inference.
+        //
+        //   1. Concatenate `segments.map(\.text)` with a single newline.
+        //   2. Build a chat-template prompt using `configuration.systemPrompt`.
+        //   3. Run inference at low temperature (0.1).
+        //   4. Strip the assistant marker and trailing whitespace.
+        //
+        _ = modelURL
+        throw PostProcessingError.serviceError(
+            "Local MLX post-processing is not yet wired. See TODO(integration) in LocalPostProcessingService.swift."
+        )
+    }
+
+    private func ensureModel() async throws -> URL {
+        if let url = configuration.modelManager.localURL(for: configuration.spec) {
+            return url
+        }
+        do {
+            return try await configuration.modelManager.download(configuration.spec)
+        } catch {
+            throw PostProcessingError.serviceError("Failed to download local LLM model: \(error)")
+        }
     }
 }

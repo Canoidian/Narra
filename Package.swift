@@ -22,5 +22,5 @@ let package = Package(
             dependencies: ["NarraV2"],
             path: "Tests/NarraV2Tests"
         ),
-    ],
+    ]
 )

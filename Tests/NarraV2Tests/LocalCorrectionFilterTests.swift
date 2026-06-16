@@ -1,6 +1,10 @@
 import XCTest
 @testable import NarraV2
 
+private let t0 = Date(timeIntervalSince1970: 0)
+private let t2 = Date(timeIntervalSince1970: 2)
+private let t4 = Date(timeIntervalSince1970: 4)
+
 final class LocalCorrectionFilterTests: XCTestCase {
     func testFillerWordsAreRemovedWhenUsedAsStandaloneFillers() {
         let filter = LocalCorrectionFilter()
@@ -8,7 +12,7 @@ final class LocalCorrectionFilterTests: XCTestCase {
         let result = filter.apply(
             PostProcessingRequest(
                 rawText: "um, I need a timer",
-                segment: TranscriptSegment(text: "um, I need a timer", startTime: 0, endTime: 2)
+                segment: TranscriptSegment(text: "um, I need a timer", startTime: t0, endTime: t2)
             )
         )
 
@@ -22,7 +26,7 @@ final class LocalCorrectionFilterTests: XCTestCase {
         let result = filter.apply(
             PostProcessingRequest(
                 rawText: "I like this",
-                segment: TranscriptSegment(text: "I like this", startTime: 0, endTime: 2, confidence: 0.98)
+                segment: TranscriptSegment(text: "I like this", startTime: t0, endTime: t2, confidence: 0.98)
             )
         )
 
@@ -32,12 +36,12 @@ final class LocalCorrectionFilterTests: XCTestCase {
 
     func testIMeanAndRatherTriggerCorrectionPrefixRemoval() {
         let filter = LocalCorrectionFilter()
-        let previous = TranscriptSegment(text: "Book lunch for Tuesday", startTime: 0, endTime: 2)
+        let previous = TranscriptSegment(text: "Book lunch for Tuesday", startTime: t0, endTime: t2)
 
         let iMeanResult = filter.apply(
             PostProcessingRequest(
                 rawText: "I mean, book lunch for Wednesday",
-                segment: TranscriptSegment(text: "I mean, book lunch for Wednesday", startTime: 2, endTime: 4),
+                segment: TranscriptSegment(text: "I mean, book lunch for Wednesday", startTime: t2, endTime: t4),
                 context: [previous]
             )
         )
@@ -47,7 +51,7 @@ final class LocalCorrectionFilterTests: XCTestCase {
         let ratherResult = filter.apply(
             PostProcessingRequest(
                 rawText: "Rather, book lunch for Thursday",
-                segment: TranscriptSegment(text: "Rather, book lunch for Thursday", startTime: 2, endTime: 4),
+                segment: TranscriptSegment(text: "Rather, book lunch for Thursday", startTime: t2, endTime: t4),
                 context: [previous]
             )
         )
@@ -57,8 +61,8 @@ final class LocalCorrectionFilterTests: XCTestCase {
 
     func testRestatementDedupesNearDuplicateContextToCleanerVersion() {
         let filter = LocalCorrectionFilter()
-        let previous = TranscriptSegment(text: "um set a timer for ten minutes", startTime: 0, endTime: 2)
-        let current = TranscriptSegment(text: "set a timer for ten minutes", startTime: 2, endTime: 4)
+        let previous = TranscriptSegment(text: "um set a timer for ten minutes", startTime: t0, endTime: t2)
+        let current = TranscriptSegment(text: "set a timer for ten minutes", startTime: t2, endTime: t4)
 
         let result = filter.apply(
             PostProcessingRequest(
