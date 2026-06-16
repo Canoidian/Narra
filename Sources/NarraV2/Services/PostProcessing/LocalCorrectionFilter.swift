@@ -1,0 +1,422 @@
+import Foundation
+
+public struct LocalCorrectionFilter: Sendable {
+    public init() {}
+
+    public func apply(_ request: PostProcessingRequest) -> PostProcessingResult {
+        let trimmedText = request.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedText = Self.cleanedText(from: trimmedText, confidence: request.segment?.confidence)
+        let cleanedSegment = Self.makeSegment(from: request.segment, text: cleanedText)
+
+        guard !cleanedText.isEmpty else {
+            return PostProcessingResult(
+                refinedText: request.context.map(\.text).joined(separator: " "),
+                segments: request.context
+            )
+        }
+
+        if Self.hasCorrectionPrefix(in: trimmedText) {
+            return PostProcessingResult(refinedText: cleanedText, segments: [cleanedSegment])
+        }
+
+        if let deduplicated = Self.deduplicatedResult(
+            context: request.context,
+            current: cleanedSegment,
+            cleanedText: cleanedText
+        ) {
+            return deduplicated
+        }
+
+        let combinedSegments = request.context + [cleanedSegment]
+        return PostProcessingResult(
+            refinedText: combinedSegments.map(\.text).joined(separator: " "),
+            segments: combinedSegments
+        )
+    }
+
+    private static func cleanedText(from text: String, confidence: Double?) -> String {
+        guard !text.isEmpty else { return text }
+
+        let tokenized = tokenize(text)
+        let withoutPrefix = stripCorrectionPrefix(from: tokenized)
+        let withoutFillers = removeStandaloneFillers(from: withoutPrefix, confidence: confidence)
+        return reconstruct(from: withoutFillers)
+    }
+
+    private static func hasCorrectionPrefix(in text: String) -> Bool {
+        let tokens = tokenize(text)
+        return stripCorrectionPrefix(from: tokens).count != tokens.count
+    }
+
+    private static func deduplicatedResult(
+        context: [TranscriptSegment],
+        current: TranscriptSegment,
+        cleanedText: String
+    ) -> PostProcessingResult? {
+        guard let previous = context.last else {
+            return nil
+        }
+
+        guard isSubstantiallySame(previous.text, cleanedText) else {
+            return nil
+        }
+
+        let selected = betterSegment(previous: previous, current: current)
+        let mergedSegments = Array(context.dropLast()) + [selected]
+
+        return PostProcessingResult(
+            refinedText: mergedSegments.map(\.text).joined(separator: " "),
+            segments: mergedSegments
+        )
+    }
+
+    private static func betterSegment(previous: TranscriptSegment, current: TranscriptSegment) -> TranscriptSegment {
+        let previousScore = cleanlinessScore(for: previous.text)
+        let currentScore = cleanlinessScore(for: current.text)
+
+        return currentScore >= previousScore ? current : previous
+    }
+
+    private static func isSubstantiallySame(_ lhs: String, _ rhs: String) -> Bool {
+        let leftTokens = normalizedComparisonTokens(from: lhs)
+        let rightTokens = normalizedComparisonTokens(from: rhs)
+
+        guard !leftTokens.isEmpty, !rightTokens.isEmpty else {
+            return false
+        }
+
+        if leftTokens == rightTokens {
+            return true
+        }
+
+        let overlap = Set(leftTokens).intersection(rightTokens).count
+        let denominator = Double(max(leftTokens.count, rightTokens.count))
+        return denominator > 0 && Double(overlap) / denominator >= 0.8
+    }
+
+    private static func cleanlinessScore(for text: String) -> Double {
+        let tokens = tokenize(text)
+        let wordCount = tokens.reduce(into: 0.0) { count, token in
+            if case .word = token {
+                count += 1
+            }
+        }
+
+        let fillerPenalty = tokens.reduce(into: 0.0) { count, token in
+            guard case .word(let word) = token else { return }
+            switch word.lowercased() {
+            case "um", "uh":
+                count += 2
+            case "like":
+                if isLikelyStandaloneLike(originalText: text) {
+                    count += 2
+                }
+            case "you":
+                if containsStandaloneYouKnow(tokens) {
+                    count += 2
+                }
+            default:
+                break
+            }
+        }
+
+        return wordCount - fillerPenalty
+    }
+
+    private static func normalizedComparisonTokens(from text: String) -> [String] {
+        tokenize(cleanedText(from: text, confidence: nil))
+            .compactMap { token in
+                guard case .word(let word) = token else { return nil }
+                return word.lowercased()
+            }
+    }
+
+    private static func stripCorrectionPrefix(from tokens: [Token]) -> [Token] {
+        guard let firstIndex = firstWordIndex(in: tokens, startingAt: 0) else {
+            return tokens
+        }
+
+        if let endIndex = matchedPrefixEndIndex(words: ["actually"], in: tokens, startingAt: firstIndex) {
+            return trimLeadingPunctuation(Array(tokens[endIndex...]))
+        }
+
+        if let endIndex = matchedPrefixEndIndex(words: ["rather"], in: tokens, startingAt: firstIndex) {
+            return trimLeadingPunctuation(Array(tokens[endIndex...]))
+        }
+
+        if let endIndex = matchedPrefixEndIndex(words: ["i", "mean"], in: tokens, startingAt: firstIndex) {
+            return trimLeadingPunctuation(Array(tokens[endIndex...]))
+        }
+
+        if let endIndex = matchedPrefixEndIndex(words: ["no", "wait"], in: tokens, startingAt: firstIndex) {
+            return trimLeadingPunctuation(Array(tokens[endIndex...]))
+        }
+
+        return tokens
+    }
+
+    private static func matchedPrefixEndIndex(words: [String], in tokens: [Token], startingAt startIndex: Int) -> Int? {
+        var currentIndex = startIndex
+
+        for (position, word) in words.enumerated() {
+            guard currentIndex < tokens.count else { return nil }
+            guard case .word(let tokenWord) = tokens[currentIndex], tokenWord.lowercased() == word else {
+                return nil
+            }
+            if position == words.count - 1 {
+                return currentIndex + 1
+            }
+            currentIndex = nextWordIndex(after: currentIndex, in: tokens)
+        }
+
+        return nil
+    }
+
+    private static func nextWordIndex(after index: Int, in tokens: [Token], skipping: Int = 0) -> Int {
+        var currentIndex = index + 1
+        var wordsSkipped = 0
+
+        while currentIndex < tokens.count {
+            if case .word = tokens[currentIndex] {
+                if wordsSkipped >= skipping {
+                    return currentIndex
+                }
+                wordsSkipped += 1
+            }
+            currentIndex += 1
+        }
+
+        return tokens.count
+    }
+
+    private static func firstWordIndex(in tokens: [Token], startingAt index: Int) -> Int? {
+        var currentIndex = index
+        while currentIndex < tokens.count {
+            if case .word = tokens[currentIndex] {
+                return currentIndex
+            }
+            currentIndex += 1
+        }
+        return nil
+    }
+
+    private static func trimLeadingPunctuation(_ tokens: [Token]) -> [Token] {
+        var currentTokens = tokens
+        while let first = currentTokens.first, case .punctuation = first {
+            currentTokens.removeFirst()
+        }
+        return currentTokens
+    }
+
+    private static func removeStandaloneFillers(from tokens: [Token], confidence: Double?) -> [Token] {
+        var output: [Token] = []
+        var index = 0
+
+        while index < tokens.count {
+            switch tokens[index] {
+            case .word(let word):
+                let lower = word.lowercased()
+
+                if lower == "um" || lower == "uh" {
+                    index = skipFillerPunctuation(after: index, in: tokens)
+                    continue
+                }
+
+                if lower == "you",
+                   let knowIndex = nextWordIndexIfMatches("know", after: index, in: tokens),
+                   isStandaloneYouKnow(before: output, after: knowIndex, in: tokens) {
+                    index = skipFillerPunctuation(after: knowIndex, in: tokens)
+                    continue
+                }
+
+                if lower == "like",
+                   shouldRemoveLike(before: output, at: index, in: tokens, confidence: confidence) {
+                    index = skipFillerPunctuation(after: index, in: tokens)
+                    continue
+                }
+
+                output.append(tokens[index])
+                index += 1
+
+            case .punctuation(let punctuation):
+                if punctuation == "," && output.isEmpty {
+                    index += 1
+                    continue
+                }
+
+                output.append(tokens[index])
+                index += 1
+            }
+        }
+
+        return output
+    }
+
+    private static func skipFillerPunctuation(after index: Int, in tokens: [Token]) -> Int {
+        var currentIndex = index + 1
+        while currentIndex < tokens.count {
+            if case .punctuation(let punctuation) = tokens[currentIndex], punctuation == "," {
+                currentIndex += 1
+                continue
+            }
+            break
+        }
+        return currentIndex
+    }
+
+    private static func nextWordIndexIfMatches(_ word: String, after index: Int, in tokens: [Token]) -> Int? {
+        var currentIndex = index + 1
+        while currentIndex < tokens.count {
+            switch tokens[currentIndex] {
+            case .word(let candidate):
+                return candidate.lowercased() == word ? currentIndex : nil
+            case .punctuation:
+                currentIndex += 1
+            }
+        }
+        return nil
+    }
+
+    private static func isStandaloneYouKnow(before output: [Token], after knowIndex: Int, in tokens: [Token]) -> Bool {
+        guard let followingIndex = nextWordOrPunctuationIndex(after: knowIndex, in: tokens) else {
+            return true
+        }
+
+        if case .punctuation(let punctuation) = tokens[followingIndex], punctuation == "," {
+            return true
+        }
+
+        return false
+    }
+
+    private static func isStandaloneLike(before output: [Token], after index: Int, in tokens: [Token]) -> Bool {
+        let atBeginning = output.isEmpty
+        let previousWasPunctuation = output.last.map {
+            if case .punctuation = $0 {
+                return true
+            }
+            return false
+        } ?? false
+
+        guard atBeginning || previousWasPunctuation else {
+            return false
+        }
+        return true
+    }
+
+    private static func shouldRemoveLike(before output: [Token], at index: Int, in tokens: [Token], confidence: Double?) -> Bool {
+        if isClearlySemanticLike(before: output, at: index, in: tokens) {
+            return (confidence ?? 0) < semanticLikeConfidenceThreshold
+        }
+
+        return isStandaloneLike(before: output, after: index, in: tokens)
+    }
+
+    private static func isLikelyStandaloneLike(originalText: String) -> Bool {
+        let lowercasedText = originalText.lowercased()
+        return lowercasedText.hasPrefix("like") || lowercasedText.contains(", like") || lowercasedText.contains(" like,")
+    }
+
+    private static func isClearlySemanticLike(before output: [Token], at index: Int, in tokens: [Token]) -> Bool {
+        guard output.contains(where: { if case .word = $0 { return true } else { return false } }) else {
+            return false
+        }
+
+        guard let followingIndex = nextWordOrPunctuationIndex(after: index, in: tokens),
+              case .word = tokens[followingIndex] else {
+            return false
+        }
+
+        return true
+    }
+
+    private static func nextWordOrPunctuationIndex(after index: Int, in tokens: [Token]) -> Int? {
+        let currentIndex = index + 1
+        return currentIndex < tokens.count ? currentIndex : nil
+    }
+
+    private static var semanticLikeConfidenceThreshold: Double {
+        0.8
+    }
+
+    private static func containsStandaloneYouKnow(_ tokens: [Token]) -> Bool {
+        var index = 0
+        while index < tokens.count {
+            if case .word(let word) = tokens[index], word.lowercased() == "you",
+               let knowIndex = nextWordIndexIfMatches("know", after: index, in: tokens),
+               isStandaloneYouKnow(before: [], after: knowIndex, in: tokens) {
+                return true
+            }
+            index += 1
+        }
+        return false
+    }
+
+    private static func makeSegment(from segment: TranscriptSegment?, text: String) -> TranscriptSegment {
+        guard let segment else {
+            return TranscriptSegment(text: text, startTime: 0, endTime: 0)
+        }
+
+        return TranscriptSegment(
+            id: segment.id,
+            text: text,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            confidence: segment.confidence
+        )
+    }
+
+    private static func tokenize(_ text: String) -> [Token] {
+        let pattern = #"[A-Za-z]+(?:'[A-Za-z]+)?|\d+|[^\sA-Za-z\d]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return [.word(text)]
+        }
+
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, options: [], range: range)
+
+        return matches.map { match in
+            let substring = String(text[Range(match.range, in: text)!])
+            if substring.rangeOfCharacter(from: .letters.union(.decimalDigits)) != nil {
+                return .word(substring)
+            }
+            return .punctuation(substring)
+        }
+    }
+
+    private static func reconstruct(from tokens: [Token]) -> String {
+        var result = ""
+        var previousWasWord = false
+
+        for token in tokens {
+            switch token {
+            case .word(let word):
+                if !result.isEmpty, !result.hasSuffix(" "), previousWasWord {
+                    result.append(" ")
+                }
+                result.append(word)
+                previousWasWord = true
+
+            case .punctuation(let punctuation):
+                if punctuation == "," || punctuation == "." || punctuation == "!" || punctuation == "?" || punctuation == ":" || punctuation == ";" {
+                    while result.last == " " {
+                        result.removeLast()
+                    }
+                    result.append(punctuation)
+                    result.append(" ")
+                    previousWasWord = false
+                }
+            }
+        }
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+}
+
+private extension LocalCorrectionFilter {
+    enum Token: Equatable {
+        case word(String)
+        case punctuation(String)
+    }
+}
