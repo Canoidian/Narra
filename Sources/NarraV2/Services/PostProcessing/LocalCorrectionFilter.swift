@@ -3,6 +3,8 @@ import Foundation
 public struct LocalCorrectionFilter: Sendable {
     public init() {}
 
+    // MARK: - Public Interface
+
     public func apply(_ request: PostProcessingRequest) -> PostProcessingResult {
         let trimmedText = request.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanedText = Self.cleanedText(from: trimmedText, confidence: request.segment?.confidence)
@@ -34,6 +36,8 @@ public struct LocalCorrectionFilter: Sendable {
         )
     }
 
+    // MARK: - Correction Prefix Stripping
+
     private static func cleanedText(from text: String, confidence: Double?) -> String {
         guard !text.isEmpty else { return text }
 
@@ -47,6 +51,8 @@ public struct LocalCorrectionFilter: Sendable {
         let tokens = tokenize(text)
         return stripCorrectionPrefix(from: tokens).count != tokens.count
     }
+
+    // MARK: - Deduplication
 
     private static func deduplicatedResult(
         context: [TranscriptSegment],
@@ -94,6 +100,8 @@ public struct LocalCorrectionFilter: Sendable {
         return denominator > 0 && Double(overlap) / denominator >= 0.8
     }
 
+    // MARK: - Scoring
+
     private static func cleanlinessScore(for text: String) -> Double {
         let tokens = tokenize(text)
         let wordCount = tokens.reduce(into: 0.0) { count, token in
@@ -102,7 +110,7 @@ public struct LocalCorrectionFilter: Sendable {
             }
         }
 
-        let fillerPenalty = tokens.reduce(into: 0.0) { count, token in
+        let perTokenPenalty = tokens.reduce(into: 0.0) { count, token in
             guard case .word(let word) = token else { return }
             switch word.lowercased() {
             case "um", "uh":
@@ -111,16 +119,14 @@ public struct LocalCorrectionFilter: Sendable {
                 if isLikelyStandaloneLike(originalText: text) {
                     count += 2
                 }
-            case "you":
-                if containsStandaloneYouKnow(tokens) {
-                    count += 2
-                }
             default:
                 break
             }
         }
 
-        return wordCount - fillerPenalty
+        let youKnowPenalty = Double(standaloneYouKnowCount(in: tokens)) * 2
+
+        return wordCount - perTokenPenalty - youKnowPenalty
     }
 
     private static func normalizedComparisonTokens(from text: String) -> [String] {
@@ -172,16 +178,12 @@ public struct LocalCorrectionFilter: Sendable {
         return nil
     }
 
-    private static func nextWordIndex(after index: Int, in tokens: [Token], skipping: Int = 0) -> Int {
+    private static func nextWordIndex(after index: Int, in tokens: [Token]) -> Int {
         var currentIndex = index + 1
-        var wordsSkipped = 0
 
         while currentIndex < tokens.count {
             if case .word = tokens[currentIndex] {
-                if wordsSkipped >= skipping {
-                    return currentIndex
-                }
-                wordsSkipped += 1
+                return currentIndex
             }
             currentIndex += 1
         }
@@ -207,6 +209,8 @@ public struct LocalCorrectionFilter: Sendable {
         }
         return currentTokens
     }
+
+    // MARK: - Filler Removal
 
     private static func removeStandaloneFillers(from tokens: [Token], confidence: Double?) -> [Token] {
         var output: [Token] = []
@@ -335,22 +339,25 @@ public struct LocalCorrectionFilter: Sendable {
         return currentIndex < tokens.count ? currentIndex : nil
     }
 
-    private static var semanticLikeConfidenceThreshold: Double {
-        0.8
-    }
+    private static let semanticLikeConfidenceThreshold: Double = 0.8
 
-    private static func containsStandaloneYouKnow(_ tokens: [Token]) -> Bool {
+    private static func standaloneYouKnowCount(in tokens: [Token]) -> Int {
+        var count = 0
         var index = 0
         while index < tokens.count {
             if case .word(let word) = tokens[index], word.lowercased() == "you",
                let knowIndex = nextWordIndexIfMatches("know", after: index, in: tokens),
                isStandaloneYouKnow(before: [], after: knowIndex, in: tokens) {
-                return true
+                count += 1
+                index = knowIndex + 1
+            } else {
+                index += 1
             }
-            index += 1
         }
-        return false
+        return count
     }
+
+    // MARK: - Segment Helpers
 
     private static func makeSegment(from segment: TranscriptSegment?, text: String) -> TranscriptSegment {
         guard let segment else {
@@ -365,6 +372,8 @@ public struct LocalCorrectionFilter: Sendable {
             confidence: segment.confidence
         )
     }
+
+    // MARK: - Tokenization
 
     private static func tokenize(_ text: String) -> [Token] {
         let pattern = #"[A-Za-z]+(?:'[A-Za-z]+)?|\d+|[^\sA-Za-z\d]"#
