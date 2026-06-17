@@ -1,7 +1,8 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreAudio
 import AudioToolbox
+import Synchronization
 import os.lock
 
 /// Captures microphone audio via `AVAudioEngine` and pushes a mono 16 kHz
@@ -56,7 +57,10 @@ public final class AudioCaptureManager: @unchecked Sendable {
 
     // MARK: - Private state
 
-    private var engine = AVAudioEngine()
+    // ponytail: engine is nil between sessions so the input AudioUnit is fully
+    // released — keeping one allocated (even stopped) can hold the device handle
+    // and force Bluetooth mics into low-quality SCO/HFP profile.
+    private var engine: AVAudioEngine?
     private let converterLock = NSLock()
     private var converter: AVAudioConverter?
     private let levelQueue = DispatchQueue(label: "com.narrav2.audio.level", qos: .utility)
@@ -64,6 +68,11 @@ public final class AudioCaptureManager: @unchecked Sendable {
     private var levelAccumulator: Float = 0
     private var levelSampleCount: Int = 0
     private var levelFlushScheduled: Bool = false
+
+    private let chunkLock = NSLock()
+    private var chunkAccumulator: [Int16] = []
+    private var chunkWindowSamples: Int = 0
+    private var chunkContinuation: AsyncStream<AudioChunk>.Continuation?
 
     // MARK: - Init
 
@@ -100,7 +109,8 @@ public final class AudioCaptureManager: @unchecked Sendable {
         guard granted else {
             throw AudioCaptureError.permissionDenied
         }
-        engine = AVAudioEngine()
+        let engine = AVAudioEngine()
+        self.engine = engine
 
         let inputNode = engine.inputNode
         // Apply preferred input device if user picked one in the menu.
@@ -151,17 +161,33 @@ public final class AudioCaptureManager: @unchecked Sendable {
     /// contains whatever audio was captured since the previous flush.
     @discardableResult
     public func stop() -> AudioChunk {
-        if isCapturing {
+        if isCapturing, let engine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             engine.reset()
             converterLock.lock(); converter = nil; converterLock.unlock()
-            // Replace the engine entirely so the input AudioUnit fully
-            // releases the device handle (otherwise the OS continues to
-            // show the mic-in-use indicator and may keep audio ducked).
-            engine = AVAudioEngine()
+            // Drop the engine entirely so the input AudioUnit releases the
+            // device handle — otherwise Bluetooth mics stay pinned to SCO/HFP
+            // and the system mic-in-use indicator lingers.
+            self.engine = nil
             isCapturing = false
         }
+        chunkLock.lock()
+        let continuation = chunkContinuation
+        let tail = chunkAccumulator
+        let tailRate = targetSampleRate
+        chunkContinuation = nil
+        chunkAccumulator.removeAll(keepingCapacity: false)
+        chunkLock.unlock()
+        // Emit the unsent remainder as a final chunk so the streaming caller
+        // gets the complete recording without re-transcribing the rolling
+        // buffer (which overlaps with already-emitted windows).
+        // ponytail: 0.2s floor avoids sending a few hundred samples of
+        // ambient noise to Whisper at stop.
+        if let continuation, tail.count >= Int(0.2 * tailRate) {
+            continuation.yield(AudioChunk(samples: tail, sampleRate: tailRate, startTime: nil))
+        }
+        continuation?.finish()
         let samples = buffer.flush()
         return AudioChunk(samples: samples, sampleRate: targetSampleRate, startTime: nil)
     }
@@ -203,6 +229,39 @@ public final class AudioCaptureManager: @unchecked Sendable {
     /// Discard buffered audio without stopping capture.
     public func clearBuffer() {
         buffer.clear()
+    }
+
+    // MARK: - Streaming chunks
+
+    /// Returns an `AsyncStream` that yields fixed-size `AudioChunk`s while
+    /// capture is running, letting downstream transcription overlap with
+    /// recording. The stream finishes when `stop()` is called. Tail audio
+    /// (less than one window worth at stop time) is NOT emitted here — the
+    /// caller should still consume `stop()`'s return value for the final
+    /// remainder.
+    ///
+    /// Call before `start()`. Calling twice replaces the previous stream and
+    /// finishes the old one.
+    /// ponytail: 5s windows preserve WhisperKit accuracy without overlap;
+    /// the Groq cleanup pass absorbs boundary glitches.
+    public func chunkStream(windowSeconds: Double = 5.0) -> AsyncStream<AudioChunk> {
+        AsyncStream { continuation in
+            let windowSamples = Int(windowSeconds * targetSampleRate)
+            chunkLock.lock()
+            chunkContinuation?.finish()
+            chunkAccumulator.removeAll(keepingCapacity: true)
+            chunkWindowSamples = max(1, windowSamples)
+            chunkContinuation = continuation
+            chunkLock.unlock()
+
+            continuation.onTermination = { [weak self] _ in
+                guard let self = self else { return }
+                self.chunkLock.lock()
+                self.chunkContinuation = nil
+                self.chunkAccumulator.removeAll(keepingCapacity: false)
+                self.chunkLock.unlock()
+            }
+        }
     }
 
     // MARK: - Tap installation
@@ -262,15 +321,13 @@ public final class AudioCaptureManager: @unchecked Sendable {
         }
 
         var error: NSError?
-        var supplied = false
-        let status = converter.convert(to: outputBuffer, error: &error) { _, status in
-            if supplied {
-                status.pointee = .noDataNow
-                return nil
+        let supplied = Mutex(false)
+        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+            let wasFed = supplied.withLock { flag -> Bool in
+                let was = flag; if !was { flag = true }; return was
             }
-            supplied = true
-            status.pointee = .haveData
-            return inputBuffer
+            outStatus.pointee = wasFed ? .noDataNow : .haveData
+            return wasFed ? nil : inputBuffer
         }
 
         guard status != .error, error == nil else {
@@ -280,8 +337,32 @@ public final class AudioCaptureManager: @unchecked Sendable {
         let int16 = bufferToInt16Samples(outputBuffer)
         if !int16.isEmpty {
             buffer.append(int16)
+            emitWindowedChunks(int16)
         }
         updateLevel(from: int16)
+    }
+
+    /// Feed converted samples into the chunk accumulator and yield a
+    /// full-window `AudioChunk` each time the threshold is crossed.
+    private func emitWindowedChunks(_ samples: [Int16]) {
+        chunkLock.lock()
+        guard let continuation = chunkContinuation, chunkWindowSamples > 0 else {
+            chunkLock.unlock()
+            return
+        }
+        chunkAccumulator.append(contentsOf: samples)
+        var emits: [[Int16]] = []
+        while chunkAccumulator.count >= chunkWindowSamples {
+            let window = Array(chunkAccumulator.prefix(chunkWindowSamples))
+            chunkAccumulator.removeFirst(chunkWindowSamples)
+            emits.append(window)
+        }
+        let rate = targetSampleRate
+        chunkLock.unlock()
+
+        for window in emits {
+            continuation.yield(AudioChunk(samples: window, sampleRate: rate, startTime: nil))
+        }
     }
 
     /// Convert an `AVAudioPCMBuffer` of `pcmFormatInt16` mono interleaved

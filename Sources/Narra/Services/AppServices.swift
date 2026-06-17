@@ -17,5 +17,15 @@ final class AppServices {
         orchestrator.localTranscriber.engineState = engineState
         self.engineState = engineState
         self.orchestrator = orchestrator
+
+        // Warm the Groq TLS connection so the first cleanup call doesn't
+        // pay handshake + DNS cost. ponytail: fire-and-forget; ignore
+        // errors — the real call will still work cold if this fails.
+        Task.detached {
+            var req = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/models")!)
+            req.httpMethod = "HEAD"
+            req.timeoutInterval = 5
+            _ = try? await URLSession.shared.data(for: req)
+        }
     }
 }

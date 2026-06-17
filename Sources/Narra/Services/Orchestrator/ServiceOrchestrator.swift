@@ -97,6 +97,15 @@ public final class ServiceOrchestrator: @unchecked Sendable {
         return try await localTranscriber.transcribe(audio: audio)
     }
 
+    /// Streaming transcription: feed live audio windows in, get
+    /// `TranscriptSegment`s out as Whisper finishes each one. Local-only for
+    /// the same reason as `transcribeWithFallback`.
+    public func transcribeStream(
+        _ stream: AsyncStream<AudioChunk>
+    ) -> AsyncThrowingStream<TranscriptSegment, Error> {
+        localTranscriber.transcribe(stream: stream)
+    }
+
     // MARK: - Post-processing
 
     public func processWithFallback(_ segments: [TranscriptSegment], level: CleanupLevel) async throws -> ProcessedTranscript {
