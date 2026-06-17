@@ -36,28 +36,41 @@ final class KeyRecorderNSView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
+        // Background fill — matches the glass-card recessed input style.
+        let bgPath = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
+        NSColor.white.withAlphaComponent(0.05).setFill()
+        bgPath.fill()
+
         let label = isRecordingKeys
             ? "Press a key, or hold then release a modifier…"
             : (currentBinding.keyChar == nil && currentBinding.modifierFlags == 0
                ? "Click to record"
                : currentBinding.displayString)
 
-        let color: NSColor = isRecordingKeys ? .secondaryLabelColor : .labelColor
+        let useMono = !isRecordingKeys && (currentBinding.keyChar != nil || currentBinding.modifierFlags != 0)
+        let font: NSFont = useMono
+            ? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+            : NSFont.systemFont(ofSize: 11)
+        let color: NSColor = isRecordingKeys
+            ? NSColor.white.withAlphaComponent(0.55)
+            : NSColor(red: 0.949, green: 0.945, blue: 0.925, alpha: 1.0) // matches Palette.darkInk
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
+            .font: font,
             .foregroundColor: color
         ]
         let str = NSAttributedString(string: label, attributes: attrs)
         let size = str.size()
         let rect = NSRect(
-            x: 8,
+            x: 10,
             y: (bounds.height - size.height) / 2,
-            width: bounds.width - 16,
+            width: bounds.width - 20,
             height: size.height
         )
         str.draw(in: rect)
 
-        let borderColor: NSColor = isRecordingKeys ? .controlAccentColor : .separatorColor
+        let borderColor: NSColor = isRecordingKeys
+            ? NSColor.white.withAlphaComponent(0.55)
+            : NSColor.white.withAlphaComponent(0.12)
         borderColor.setStroke()
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
         path.lineWidth = isRecordingKeys ? 2 : 1

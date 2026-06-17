@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "NarraV2",
+    name: "Narra",
     platforms: [.macOS(.v15)],
     dependencies: [
         // STT: WhisperKit (local on-device transcription via Apple Neural Engine)
@@ -13,16 +13,17 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "NarraV2",
+            name: "Narra",
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
             ],
-            path: "Sources/NarraV2"
+            path: "Sources/Narra",
+            resources: [.process("Resources")]
         ),
         .testTarget(
-            name: "NarraV2Tests",
-            dependencies: ["NarraV2"],
-            path: "Tests/NarraV2Tests"
+            name: "NarraTests",
+            dependencies: ["Narra"],
+            path: "Tests/NarraTests"
         ),
     ]
 )

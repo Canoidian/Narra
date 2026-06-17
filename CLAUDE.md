@@ -1,25 +1,55 @@
-# Design System — Liquid Glass (Dark Mode)
+# Design System — Glass Bead (Dark)
 
-This app uses a dark-mode liquid glass design language inspired by Apple's Liquid Glass material. Every UI element must follow these rules. Do not improvise values.
+Narra is dark-only. Every floating control reads as a 3D liquid-glass bead: refractive edges, glossy top highlight, soft bottom caustic, faint chromatic fringe. Surfaces inside content panels are flat sibling slabs of the same glass. Do not improvise values — use the tokens in `Sources/Narra/Design/DesignTokens.swift`.
 
-## Core Principles
+## Core principles
 
-1. **Glass is for navigation, not decoration.** Apply glass to toolbars, tab bars, sidebars, floating controls, and contextual menus. Content areas stay solid.
-2. **Never stack glass on glass.** A glass surface must never sit directly on another glass surface — it kills legibility and tanks performance.
-3. **Soft, organic edges everywhere.** No sharp corners. Every container uses continuous corner radius (`RoundedRectangle(cornerRadius:, style: .continuous)`).
-4. **Motion should feel like water.** Transitions are fluid and spring-based. Nothing snaps. Nothing bounces hard.
-5. **Dark mode is the default.** All tokens below are dark-mode values. Light mode is not in scope.
+1. **Glass is the language of the app, not just chrome.** HUD pills, home panel slabs, settings cards — all share the same dark-glass family. Backgrounds are warm charcoal, never pure black.
+2. **The HUD opens horizontally.** The recording / processing / reviewing states render the same `GlassBead`. The bead pops in at ~80pt wide and stretches to ~320pt to reveal its contents. Content fades in only after the width animation lands.
+3. **Glass on glass is forbidden.** A bead, slab, or card may never sit directly on another. Editorial content surfaces are flat (`GlassCard` with one `.glassEffect` layer); the bead does not nest other glass.
+4. **Soft, organic edges.** Capsules for HUD beads. `RoundedRectangle(cornerRadius:, style: .continuous)` for everything else.
+5. **Motion is liquid but quiet.** Spring (response 0.55, damping 0.78) for the bead open. Ease-out 200ms for state swaps. No bounce-heavy springs.
 
-## Glass Material
+## Tokens
 
-Use Apple's native glass effect APIs (iOS 26+ / macOS Tahoe+):
+| Token | Where |
+|---|---|
+| `Palette.canvas` (`#14130F`) | App background / window fill. |
+| `Palette.surface`, `surfaceAlt` | Inside glass cards — used sparingly; the glass material does most of the work. |
+| `Palette.border` | Hairline strokes (`Color.white.opacity(0.12)` in dark resolution). |
+| `Palette.ink`, `inkSoft`, `muted` | Text. Body = `ink`, secondary = `muted`. |
+| `Palette.redBg`/`redInk`, `greenBg`/`greenInk`, etc. | Semantic accents only (record indicator, accept/discard, warnings). |
+| `Typography.serif` | Editorial headings only (home panel title, large display text). `.system(design: .serif)`. |
+| `Typography.sans` | All UI body / labels / buttons. |
+| `Typography.mono` | Code, keystrokes, pipeline status. |
+| `CornerRadius.sm/md/lg/xl/pill` | `4 / 6 / 8 / 12 / 16`. |
+| `Spacing.xs…xxl` | `4 / 8 / 12 / 16 / 20 / 24`. |
+| `Motion.entry / snappy / microFade` | Use `entry` for first-paint reveals, `snappy` for state changes. |
+
+## Components
 
 ```swift
-// PRIMARY: Use .glassEffect for true liquid glass
-.glassEffect(.regular.interactive, in: .capsule)
-.glassEffect(.regular, in: RoundedRectangle(cornerRadius: CornerRadius.lg, style: .continuous))
+// Floating HUD (recording / processing / reviewing)
+GlassBead(width: open ? 320 : 80, height: 56) {
+    HStack { ... }
+}
 
-// FALLBACK (iOS 25 and earlier): Use system materials
-.background(.ultraThinMaterial)
-.background(.thinMaterial)
+// Content surfaces (home panel, settings cards)
+GlassCard(padding: Spacing.lg, radius: CornerRadius.xl) {
+    VStack { ... }
+}
 
+// Native macOS 26 glass material
+.glassEffect(.regular, in: Capsule(style: .continuous))
+.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+```
+
+Fallback path (macOS < 26) uses `.ultraThinMaterial` + a black tint overlay; defined inside `GlassBead` / `GlassCard`. Call sites should never branch on availability themselves.
+
+## What not to do
+
+- No gradient brand marks, no purple-cyan accent gradients, no `BrandGradient` — deleted.
+- No light theme. `.preferredColorScheme(.dark)` is set at scene level.
+- No glass for `KeyRecorderView` input chip or other recessed inputs — those use a flat `Color.white.opacity(0.05)` fill with a 1pt white-12% border.
+- No emoji in code, source comments, or UI strings. SF Symbols only.
+- No drop shadows on flat editorial surfaces. Shadows belong to the bead (which is supposed to look like it's floating in the room).

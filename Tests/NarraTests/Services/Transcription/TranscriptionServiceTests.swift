@@ -1,5 +1,5 @@
 import XCTest
-@testable import NarraV2
+@testable import Narra
 
 final class TranscriptionServiceTests: XCTestCase {
 

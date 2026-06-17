@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ServiceManagement
 
 // MARK: - CleanupLevel
 
@@ -80,6 +81,17 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         didSet { save(binding: pushToToggleBinding, forKey: "pushToToggleBinding") }
     }
 
+    @Published var launchAtLogin: Bool {
+        didSet {
+            UserDefaults.standard.set(launchAtLogin, forKey: "launchAtLogin")
+            applyLaunchAtLogin()
+        }
+    }
+
+    @Published var muteOutputWhenRecording: Bool {
+        didSet { UserDefaults.standard.set(muteOutputWhenRecording, forKey: "muteOutputWhenRecording") }
+    }
+
     private init() {
         // Defaults: fn for push-to-talk, fn+Space for push-to-toggle.
         let functionFlag = NSEvent.ModifierFlags.function.rawValue
@@ -111,11 +123,28 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         } else {
             pushToToggleBinding = KeyBinding(keyChar: " ", modifierFlags: functionFlag)
         }
+
+        launchAtLogin = UserDefaults.standard.bool(forKey: "launchAtLogin")
+        muteOutputWhenRecording = UserDefaults.standard.bool(forKey: "muteOutputWhenRecording")
     }
 
     private func save(binding: KeyBinding, forKey key: String) {
         if let data = try? JSONEncoder().encode(binding) {
             UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    private func applyLaunchAtLogin() {
+        do {
+            if launchAtLogin {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            // Surface via console; the toggle reverts on next launch if the
+            // OS rejected it (e.g. user hasn't approved the helper).
+            NSLog("Narra: launch-at-login update failed: \(error)")
         }
     }
 }

@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import NarraV2
+@testable import Narra
 
 final class WAVEncoderTests: XCTestCase {
 

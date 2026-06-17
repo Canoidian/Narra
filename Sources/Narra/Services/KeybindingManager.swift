@@ -24,16 +24,28 @@ final class KeybindingManager: @unchecked Sendable {
         IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
         guard hasInputMonitoringAccess else { return }
 
-        let flagMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+        // Global monitors fire only when ANOTHER app is frontmost. Local
+        // monitors fire only when WE are frontmost. We need both so the
+        // shortcut works regardless of who has focus (e.g. while Home is open).
+        let flagGlobal = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
         }
-        let downMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        let downGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyDown(event)
         }
-        let upMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
+        let upGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
             self?.handleKeyUp(event)
         }
-        monitors = [flagMonitor, downMonitor, upMonitor].compactMap { $0 }
+        let flagLocal = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleFlagsChanged(event); return event
+        }
+        let downLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKeyDown(event); return event
+        }
+        let upLocal = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            self?.handleKeyUp(event); return event
+        }
+        monitors = [flagGlobal, downGlobal, upGlobal, flagLocal, downLocal, upLocal].compactMap { $0 }
     }
 
     func stop() {

@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:NarraV2}",
+            "name": "Debug Narra",
+            "target": "Narra",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Narra"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:NarraV2}",
+            "name": "Release Narra",
+            "target": "Narra",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Narra"
+        }
+    ]
+}

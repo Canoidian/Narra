@@ -1,6 +1,6 @@
 import XCTest
 import AVFoundation
-@testable import NarraV2
+@testable import Narra
 
 final class AudioCaptureManagerTests: XCTestCase {
 

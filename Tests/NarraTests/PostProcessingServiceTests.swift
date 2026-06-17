@@ -1,5 +1,5 @@
 import XCTest
-@testable import NarraV2
+@testable import Narra
 
 private let t0 = Date(timeIntervalSince1970: 0)
 private let t2 = Date(timeIntervalSince1970: 2)

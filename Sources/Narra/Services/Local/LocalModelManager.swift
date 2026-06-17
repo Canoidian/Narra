@@ -5,7 +5,7 @@ import Foundation
 ///
 /// On first launch the orchestrator calls `downloadIfNeeded(for:)`. The
 /// download is best-effort and resumable; on success the file lands in
-/// `~/Library/Application Support/NarraV2/Models/<key>.<ext>`. On failure
+/// `~/Library/Application Support/Narra/Models/<key>.<ext>`. On failure
 /// the caller can fall back to the cloud service.
 ///
 /// The manager does not block startup: callers should download in the
@@ -67,16 +67,23 @@ public final class LocalModelManager: @unchecked Sendable {
     private let baseDirectory: URL
 
     public init(
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         fileManager: FileManager = .default,
         baseDirectory: URL? = nil
     ) {
-        self.session = session
+        // Dedicated session: large files need a long resource timeout, and
+        // URLSession.shared's default request timeout (60s) can spuriously
+        // fail on slow links.
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 60 * 60   // 1h ceiling for huge models
+        config.waitsForConnectivity = true
+        self.session = session ?? URLSession(configuration: config)
         self.fileManager = fileManager
         self.baseDirectory = baseDirectory ?? fileManager
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first!
-            .appendingPathComponent("NarraV2/Models", isDirectory: true)
+            .appendingPathComponent("Narra/Models", isDirectory: true)
         try? fileManager.createDirectory(at: self.baseDirectory, withIntermediateDirectories: true)
     }
 
@@ -87,7 +94,7 @@ public final class LocalModelManager: @unchecked Sendable {
     ///
     /// For WhisperKit-managed models (keys matching `openai_whisper-*`),
     /// this also checks WhisperKit's Hugging Face hub cache at
-    /// `~/.cache/huggingface/hub/` before falling back to the NarraV2
+    /// `~/.cache/huggingface/hub/` before falling back to the Narra
     /// app-support directory. WhisperKit downloads Core ML bundles, so the
     /// check looks for a directory rather than a `.bin` file.
     public func localURL(for spec: ModelSpec) -> URL? {
@@ -103,7 +110,7 @@ public final class LocalModelManager: @unchecked Sendable {
             }
         }
 
-        // 2. Legacy / LLM models: look for a flat .bin file in the NarraV2
+        // 2. Legacy / LLM models: look for a flat .bin file in the Narra
         //    application-support directory.
         let url = baseDirectory.appendingPathComponent(spec.key + ".bin")
         return fileManager.fileExists(atPath: url.path) ? url : nil
@@ -160,17 +167,40 @@ public final class LocalModelManager: @unchecked Sendable {
             progress(1.0)
             return dest
         }
-        let (tempURL, response) = try await session.download(from: spec.url)
+        let delegate = DownloadProgressDelegate(progress: progress)
+        let (tempURL, response) = try await session.download(from: spec.url, delegate: delegate)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw LocalModelError.downloadFailed(spec.key, http.statusCode)
         }
-        // Atomically move the download to its final location
         if fileManager.fileExists(atPath: dest.path) {
             try fileManager.removeItem(at: dest)
         }
         try fileManager.moveItem(at: tempURL, to: dest)
         progress(1.0)
         return dest
+    }
+}
+
+/// Per-task delegate that forwards byte-progress to a Swift callback.
+/// ponytail: simplest progress hook — `URLSession.shared.download(from:)`
+/// gives no progress, so the big-model download looked frozen.
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let progress: @Sendable (Double) -> Void
+    init(progress: @escaping @Sendable (Double) -> Void) { self.progress = progress }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        progress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+    }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        // No-op: the async `download(from:delegate:)` returns the temp URL.
     }
 }
 
