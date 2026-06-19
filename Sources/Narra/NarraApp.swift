@@ -72,17 +72,57 @@ struct NarraApp: App {
             SettingsRoot()
                 .preferredColorScheme(.dark)
         }
+
+        // ponytail: re-running onboarding via Settings flips the
+        // hasCompletedOnboarding flag but does not auto-reopen this window —
+        // user relaunches the app. A NotificationCenter trigger is plausible
+        // but unnecessary for a one-button-in-Settings path.
+        Window("Setup", id: "onboarding") {
+            OnboardingWindow()
+                .preferredColorScheme(.dark)
+        }
+        .windowStyle(.plain)
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .commandsRemoved()
     }
 }
 
 // MARK: - Menu Bar Content
 
 private struct MenuBarContent: View {
-    @StateObject private var mics = MicrophoneList()
+    @ObservedObject private var settings = AppSettings.shared
     @Environment(\.openSettings) private var openSettings
 
+    private var currentProvider: TranscriptionProvider {
+        TranscriptionProviderRegistry.provider(settings.selectedProviderID)
+    }
+
+    private var currentModelDisplayName: String {
+        currentProvider.models.first(where: { $0.id == settings.selectedModelID })?.displayName
+            ?? settings.selectedModelID
+    }
+
+    /// "<provider> · <model>" — the dot indicator is a separate SF Symbol so
+    /// it never falls back to a font-emoji glyph on certain systems.
+    private func currentStatusText() -> String {
+        "Narra — \(currentProvider.displayName) · \(currentModelDisplayName)"
+    }
+
     var body: some View {
-        // Native NSMenu-style rows — macOS handles styling, padding, key chips.
+        // Status row — disabled Label with a tinted SF Symbol dot.
+        Button(action: {}) {
+            Label {
+                Text(currentStatusText())
+            } icon: {
+                Image(systemName: "circle.fill")
+                    .foregroundStyle(Palette.greenInk)
+            }
+        }
+        .disabled(true)
+
+        Divider()
+
         Button("Open Narra") {
             NSApp.activate(ignoringOtherApps: true)
             openSettings()
@@ -94,29 +134,17 @@ private struct MenuBarContent: View {
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
 
-        Menu("Microphone") {
-            Button {
-                UserDefaults.standard.removeObject(forKey: "preferredMicUniqueID")
-                mics.refresh()
-            } label: {
-                if mics.selectedUID == nil {
-                    Label("System Default", systemImage: "checkmark")
-                } else {
-                    Text("System Default")
-                }
+        Divider()
+
+        Menu("Provider") {
+            ForEach(TranscriptionProviderRegistry.all, id: \.id) { provider in
+                providerMenuItem(provider)
             }
-            Divider()
-            ForEach(mics.devices, id: \.uniqueID) { device in
-                Button {
-                    UserDefaults.standard.set(device.uniqueID, forKey: "preferredMicUniqueID")
-                    mics.refresh()
-                } label: {
-                    if mics.selectedUID == device.uniqueID {
-                        Label(device.localizedName, systemImage: "checkmark")
-                    } else {
-                        Text(device.localizedName)
-                    }
-                }
+        }
+
+        Menu("Model") {
+            ForEach(currentProvider.models, id: \.id) { model in
+                modelMenuItem(model)
             }
         }
 
@@ -133,5 +161,47 @@ private struct MenuBarContent: View {
         }
         .keyboardShortcut("q", modifiers: .command)
     }
-}
 
+    @ViewBuilder
+    private func providerMenuItem(_ provider: TranscriptionProvider) -> some View {
+        let isSelected = provider.id == settings.selectedProviderID
+        let isStubbed = provider.status == .stubbed
+        let title = isStubbed ? "\(provider.displayName) (soon)" : provider.displayName
+        Button {
+            guard !isStubbed else { return }
+            settings.selectedProviderID = provider.id
+            // ponytail: snap to provider's default model instead of tracking
+            // last-used per provider.
+            settings.selectedModelID = provider.defaultModelID
+            AppServices.shared.orchestrator.setProvider(
+                provider.id,
+                model: provider.defaultModelID
+            )
+        } label: {
+            if isSelected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+        .disabled(isStubbed)
+    }
+
+    @ViewBuilder
+    private func modelMenuItem(_ model: ProviderModel) -> some View {
+        let isSelected = model.id == settings.selectedModelID
+        Button {
+            settings.selectedModelID = model.id
+            AppServices.shared.orchestrator.setProvider(
+                settings.selectedProviderID,
+                model: model.id
+            )
+        } label: {
+            if isSelected {
+                Label(model.displayName, systemImage: "checkmark")
+            } else {
+                Text(model.displayName)
+            }
+        }
+    }
+}

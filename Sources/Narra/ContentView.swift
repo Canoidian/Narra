@@ -6,7 +6,9 @@ struct ContentView: View {
     @StateObject private var viewModel = ContentViewModel()
     @State private var showInputMonitoringAlert = false
     @State private var showMicMenu = false
+    @State private var didTriggerOnboarding = false
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -31,6 +33,13 @@ struct ContentView: View {
             KeybindingManager.shared.start()
             if !KeybindingManager.shared.hasInputMonitoringAccess {
                 showInputMonitoringAlert = true
+            }
+            // ponytail: guard fires once per launch — relaunch after a
+            // Settings "Re-run onboarding…" reopens the wizard on next start.
+            if !didTriggerOnboarding && !AppSettings.shared.hasCompletedOnboarding {
+                didTriggerOnboarding = true
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "onboarding")
             }
         }
         .alert("Input Monitoring Required", isPresented: $showInputMonitoringAlert) {
