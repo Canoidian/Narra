@@ -69,7 +69,7 @@ struct NarraApp: App {
         .menuBarExtraStyle(.menu)
 
         Settings {
-            SettingsView()
+            SettingsRoot()
                 .preferredColorScheme(.dark)
         }
     }
