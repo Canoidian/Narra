@@ -118,6 +118,8 @@ enum Typography {
 
 enum Iridescence {
     /// Left-to-right prismatic sweep matching the icon's refracted edge.
+    /// Consumed only by `WaveformView` via `Canvas`'s `Gradient(colors:)`
+    /// shading API — a `LinearGradient` view would be unusable there.
     static let stops: [Color] = [
         Color(hex: 0x8E76C9),  // cool violet
         Color(hex: 0x7BC0E8),  // cyan
@@ -125,13 +127,6 @@ enum Iridescence {
         Color(hex: 0xE89F8A),  // warm peach
         Color(hex: 0xD4A06A),  // soft amber
     ]
-
-    /// Linear gradient over the stops, evenly spaced.
-    static let sweep = LinearGradient(
-        colors: stops,
-        startPoint: .leading,
-        endPoint: .trailing
-    )
 }
 
 // MARK: - Color helpers

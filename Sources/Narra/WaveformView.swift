@@ -32,6 +32,5 @@ struct WaveformView: View {
             }
         }
         .animation(.linear(duration: 0.05), value: levels)
-        .frame(height: 60)
     }
 }
