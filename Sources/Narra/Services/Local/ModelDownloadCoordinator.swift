@@ -129,13 +129,26 @@ final class ModelDownloadCoordinator: ObservableObject {
 
     /// Nonisolated variant so the orchestrator (running off the main actor)
     /// can resolve the same directory without hopping back.
+    ///
+    /// FluidAudio names the bundle whatever the current version wants
+    /// (`parakeet-tdt-0.6b-v3-coreml`, `parakeet-unified-en-0.6b`, etc.).
+    /// Hardcoding the name caused the UI to think downloads failed when
+    /// FluidAudio had actually written a renamed bundle. Pick the first
+    /// non-empty `parakeet*` subdirectory under `base` and treat that as
+    /// the bundle.
     nonisolated static func resolveParakeetDirectory(
         in base: URL,
         fileManager: FileManager = .default
     ) -> URL? {
-        let candidate = base
-            .appendingPathComponent("parakeet-tdt-0.6b-v3-coreml", isDirectory: true)
-        return fileManager.fileExists(atPath: candidate.path) ? candidate : nil
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: base,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        return entries.first { url in
+            url.lastPathComponent.lowercased().hasPrefix("parakeet")
+                && (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
     }
 
     /// Static-friendly path to the Parakeet base directory. Mirrors the
