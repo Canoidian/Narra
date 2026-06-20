@@ -12,12 +12,16 @@ struct ContentView: View {
         Group {
             switch viewModel.uiMode {
             case .hidden:
-                Color.clear.frame(width: 1, height: 1)
+                Color.clear
             case .recording, .processing, .reviewing:
                 NotchBead(viewModel: viewModel)
                     .transition(.opacity)
             }
         }
+        // ponytail: fixed outer frame so NSHostingView's content-size extrema
+        // never flap. Without this, the (1,1) → unbounded transition on fn
+        // races setFrame and crashes in _postWindowNeedsUpdateConstraints.
+        .frame(width: 320, height: 72)
         .animation(Motion.snappy, value: viewModel.uiMode)
         .background(HUDWindowBehavior(mode: viewModel.uiMode))
     }
@@ -55,11 +59,15 @@ private struct HUDWindowBehavior: NSViewRepresentable {
                 // Window is the same width as the notch (or a sensible
                 // ~200pt pill on non-notch displays); height leaves room
                 // for the bead's drop expansion + drop shadow.
-                let notchWidth = NotchGeometry.notchWidth(for: screen)
-                let w: CGFloat = notchWidth + 24
+                // ponytail: fixed 320 matches ContentView's outer frame, which
+                // exists so NSHostingView extrema don't flap on mode change.
+                let w: CGFloat = 320
                 let h: CGFloat = 72
-                let x = screen.frame.midX - w / 2
-                let y = screen.frame.maxY - h
+                // visibleFrame excludes the menu bar / notch strip, so the
+                // window's top sits flush under the notch — the bead reads as
+                // dropping down from it instead of hiding behind it.
+                let x = screen.visibleFrame.midX - w / 2
+                let y = screen.visibleFrame.maxY - h
                 window.level = .statusBar
                 window.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true, animate: false)
                 window.orderFront(nil)
