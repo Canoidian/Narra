@@ -109,6 +109,26 @@ enum Typography {
     }
 }
 
+// MARK: - Iridescence
+//
+// HUD-only carve-out from the no-gradients rule. Stops are sampled from the
+// app icon's refractive edge — violet, cyan, silver core, peach, amber — and
+// are consumed exclusively by WaveformView in NotchBead. Do not use these
+// stops anywhere else; everything else stays monochrome.
+
+enum Iridescence {
+    /// Left-to-right prismatic sweep matching the icon's refracted edge.
+    /// Consumed only by `WaveformView` via `Canvas`'s `Gradient(colors:)`
+    /// shading API — a `LinearGradient` view would be unusable there.
+    static let stops: [Color] = [
+        Color(hex: 0x8E76C9),  // cool violet
+        Color(hex: 0x7BC0E8),  // cyan
+        Color(hex: 0xF1EFEA),  // silver / pearl core
+        Color(hex: 0xE89F8A),  // warm peach
+        Color(hex: 0xD4A06A),  // soft amber
+    ]
+}
+
 // MARK: - Color helpers
 
 extension Color {

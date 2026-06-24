@@ -34,15 +34,25 @@ struct NotchBead: View {
     @State private var open = false
 
     private let height: CGFloat = 28
-    private let collapsedWidth: CGFloat = 48
+
+    /// Collapsed width = the notch width itself, so the bead enters as a
+    /// seamless extension of the system notch instead of a separate pill.
+    private var collapsedWidth: CGFloat {
+        NotchGeometry.notchWidth(for: NSScreen.main ?? NSScreen.screens[0])
+    }
 
     private var targetWidth: CGFloat {
-        let notchWidth = NotchGeometry.notchWidth(for: NSScreen.main ?? NSScreen.screens[0])
+        let notchWidth = collapsedWidth
         switch viewModel.uiMode {
-        case .recording, .processing:
-            return notchWidth
         case .reviewing:
             return notchWidth + 88
+        case .recording:
+            // Toggle recording shows cancel/confirm disks — needs the extra
+            // width. Push-to-talk has no inline controls, so it stays at
+            // notch width and reads as a hanging extension of the notch.
+            return viewModel.isToggleRecording ? notchWidth + 88 : notchWidth
+        case .processing:
+            return notchWidth
         default:
             return collapsedWidth
         }
@@ -69,21 +79,33 @@ struct NotchBead: View {
             beadBackground
 
             HStack(spacing: Spacing.sm) {
-                if viewModel.uiMode == .reviewing {
+                switch viewModel.uiMode {
+                case .recording where viewModel.isToggleRecording:
+                    recordingCancelDisk(action: viewModel.discardRecording)
+                        .accessibilityLabel("Discard recording")
+                case .reviewing:
                     iconButton(symbol: "xmark",
                                tint: Palette.redInk,
                                action: viewModel.cancelReview)
                         .accessibilityLabel("Discard transcription")
+                default:
+                    EmptyView()
                 }
 
                 contentBody
                     .frame(maxWidth: .infinity)
 
-                if viewModel.uiMode == .reviewing {
+                switch viewModel.uiMode {
+                case .recording where viewModel.isToggleRecording:
+                    recordingConfirmDisk(action: viewModel.stopAndReview)
+                        .accessibilityLabel("Stop and review recording")
+                case .reviewing:
                     iconButton(symbol: "checkmark",
                                tint: Palette.greenInk,
                                action: viewModel.acceptReview)
                         .accessibilityLabel("Paste transcription")
+                default:
+                    EmptyView()
                 }
             }
             .padding(.horizontal, Spacing.sm)
@@ -114,7 +136,16 @@ struct NotchBead: View {
 
     @ViewBuilder
     private var beadBackground: some View {
-        let shape = Capsule(style: .continuous)
+        // Flat top so the bead reads as a hanging extension of the system
+        // notch; rounded bottom so it still feels like glass. Top corners
+        // are 0 even on non-notch displays — the look stays consistent.
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: 0,
+            bottomLeadingRadius: height / 2,
+            bottomTrailingRadius: height / 2,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
         if #available(macOS 26.0, *) {
             shape.fill(.black.opacity(0.85))
                 .glassEffect(.regular, in: shape)
@@ -133,6 +164,37 @@ struct NotchBead: View {
                 .foregroundStyle(tint)
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(Color.white.opacity(0.10)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Recording-state cancel: solid dark-gray disk with a white X.
+    private func recordingCancelDisk(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color(white: 0.18)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Recording-state confirm: soft glass-white disk with a gray checkmark.
+    /// ponytail: white.opacity(0.92) + hairline stroke reads as "glass white"
+    /// without needing a second .glassEffect layer (the bead already has one,
+    /// and glass-on-glass is forbidden).
+    private func recordingConfirmDisk(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color(white: 0.25))
+                .frame(width: 22, height: 22)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.92))
+                        .overlay(Circle().stroke(Color.white.opacity(0.4), lineWidth: 0.5))
+                )
         }
         .buttonStyle(.plain)
     }

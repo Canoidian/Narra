@@ -26,6 +26,12 @@ final class ContentViewModel: ObservableObject {
 
     var isRecording: Bool { uiMode == .recording }
 
+    /// True while a toggle-mode recording is live. Toggle recordings can be
+    /// stopped or discarded from the notch (the user isn't holding a key),
+    /// so the cancel/confirm disks appear. Push-to-talk recordings end on
+    /// key release, so they need no inline controls.
+    var isToggleRecording: Bool { uiMode == .recording && currentMode == .toggle }
+
     private var currentMode: CaptureMode = .pushToTalk
     private let orchestrator = AppServices.shared.orchestrator
     private let captureManager = AudioCaptureManager()
@@ -88,6 +94,21 @@ final class ContentViewModel: ObservableObject {
     }
 
     // MARK: - UI actions
+
+    /// Discards the in-flight recording (notch cancel button).
+    func discardRecording() {
+        guard uiMode == .recording else { return }
+        cancelRecording()
+    }
+
+    /// Stops the in-flight recording and routes to the reviewing state
+    /// (notch confirm button). The user explicitly chose to keep the take,
+    /// so we bypass the silence-threshold drop that `handleToggleHotkey`
+    /// applies; if they tapped check, they want to see what they got.
+    func stopAndReview() {
+        guard uiMode == .recording else { return }
+        finishRecording(autoPaste: false)
+    }
 
     func acceptReview() {
         guard uiMode == .reviewing else { return }
